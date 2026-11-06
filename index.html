@@ -72,7 +72,7 @@ ol.steps li span{font-family:var(--mono);font-size:11px;display:block}
 .types label.on{border-color:var(--accent);background:var(--accent-soft)}
 .types b{font-family:var(--display);font-size:20px;letter-spacing:.03em;text-transform:uppercase}
 .types small{color:var(--muted)}
-.counters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.counters{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
 .ctr{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);display:flex;flex-direction:column;gap:8px;min-width:0}
 .ctr .nm{font-weight:600;font-size:14px}
 .ctr .row{display:flex;align-items:center;gap:6px}
@@ -119,6 +119,8 @@ td.mono{font-family:var(--mono)}
 .tag{font-family:var(--display);font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:4px}
 .tag.pc{background:var(--accent-soft);color:var(--accent)}
 .tag.ms{background:var(--sage-soft);color:var(--sage)}
+.tag.wait{background:var(--warn-soft);color:var(--warn)}
+.tag.sent{background:var(--sage-soft);color:var(--sage)}
 .tag.ot{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
 .flight .meta{min-width:0}
 .flight .meta b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -146,14 +148,15 @@ a{color:var(--accent)}
 <nav class="tabs" aria-label="Sections" id="tabs">
   <div class="wrap" role="tablist">
     <button role="tab" data-view="log" aria-selected="true" type="button">Log flight</button>
-    <button role="tab" data-view="records" aria-selected="false" type="button">Records</button>
+    <button role="tab" data-view="mine" aria-selected="false" type="button">My flights</button>
+    <button role="tab" data-view="records" aria-selected="false" type="button" id="tab-records" hidden>Records</button>
   </div>
 </nav>
 
 <main class="wrap">
   <!-- CREW CODE -->
   <section id="view-code" class="view panel stack" hidden>
-    <div><h2>Sign in</h2><p class="lead">Enter the crew code from the office. You only do this once on this phone.</p></div>
+    <div><h2>Sign in</h2><p class="lead">Enter the crew code from the office. You only do this once on this phone. Office staff: enter the admin code to see all records.</p></div>
     <label class="f">Crew code<input id="code-in" autocomplete="off" autocapitalize="characters"></label>
     <div class="err" id="code-err" hidden></div>
     <button class="btn primary" id="code-btn" type="button">Continue</button>
@@ -236,6 +239,17 @@ a{color:var(--accent)}
         <li><span>Review and submit before leaving the aircraft. No signal is fine: the flight is held on the phone and sends itself once you're back in range.</span></li>
       </ol>
     </details>
+  </section>
+
+  <!-- MY FLIGHTS -->
+  <section id="view-mine" class="view stack" hidden>
+    <div><h2>My flights</h2><p class="lead">Flights submitted from this phone, newest first. "Waiting" means the flight is saved here and will send once you have signal.</p></div>
+    <div id="mine-list" class="stack"></div>
+    <div class="panel stack" style="margin-top:8px">
+      <h3>Signed in as <span id="role-label">crew</span></h3>
+      <p class="lead" style="margin:0">To switch to the admin code, or if the office gives you a new crew code, sign in again. Flights waiting to send are kept.</p>
+      <div><button class="btn small ghost" id="btn-switch" type="button">Sign in with a different code</button></div>
+    </div>
   </section>
 
   <!-- RECORDS -->

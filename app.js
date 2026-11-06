@@ -57,7 +57,8 @@ const kv = {
 /* ---------------- state ---------------- */
 let code = ls.get("aol-code", "");
 let cfg = ls.get("aol-cfg", DEFAULT_CFG);
-let records = ls.get("aol-records", null); // {at, flights}
+let role = ls.get("aol-role", "crew"); // "crew" logs flights; "admin" also sees Records
+let records = ls.get("aol-records", null); // {at, flights}, admin only
 let step = 0;
 let photos = []; // {blob, url}
 let form = blankForm();
@@ -90,8 +91,11 @@ function show(view) {
   if (!code) view = "code";
   $("#tabs").hidden = view === "code";
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === view));
-  ["code", "log", "records"].forEach(v => ($("#view-" + v).hidden = v !== view));
+  if (view === "records" && role !== "admin") view = "log";
+  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === view));
+  ["code", "log", "mine", "records"].forEach(v => ($("#view-" + v).hidden = v !== view));
   if (view !== "code") ls.set("aol-tab", view);
+  if (view === "mine") renderMine();
   if (view === "records") { renderRecords(); loadRecords(); }
 }
 $$("nav.tabs button").forEach(b => b.addEventListener("click", () => show(b.dataset.view)));
@@ -110,16 +114,24 @@ async function loadConfig() {
   if (!navigator.onLine || !code) return;
   try {
     const r = await apiGet("config");
-    if (r.ok) { cfg = { pilots: r.pilots || [], aircraft: r.aircraft || [], species: (r.species && r.species.length) ? r.species : DEFAULT_CFG.species }; ls.set("aol-cfg", cfg); if (step === 0) renderStep1(); if (step === 1) renderMission(); }
-    else if (r.error === "bad_code") signOut("That crew code no longer works. Ask the office for the current one.");
+    if (r.ok) { setRole(r.role); cfg = { pilots: r.pilots || [], aircraft: r.aircraft || [], species: (r.species && r.species.length) ? r.species : DEFAULT_CFG.species }; ls.set("aol-cfg", cfg); if (step === 0) renderStep1(); if (step === 1) renderMission(); }
+    else if (r.error === "bad_code") signOut("That code no longer works. Ask the office for the current one.");
   } catch (e) { /* offline or slow: keep the saved lists */ }
 }
+function setRole(r) {
+  role = r === "admin" ? "admin" : "crew"; ls.set("aol-role", role);
+  $("#tab-records").hidden = role !== "admin";
+  $("#role-label").textContent = role === "admin" ? "office (admin)" : "crew";
+  if (role !== "admin") { records = null; ls.del("aol-records"); if (!$("#view-records").hidden) show("log"); }
+}
 function signOut(msg) { code = ""; ls.del("aol-code"); show("code"); if (msg) { $("#code-err").textContent = msg; $("#code-err").hidden = false; } }
+
+$("#btn-switch").addEventListener("click", () => { $("#code-err").hidden = true; signOut(); });
 
 /* ---------------- crew code ---------------- */
 $("#code-btn").addEventListener("click", async () => {
   const v = $("#code-in").value.trim(); const er = $("#code-err");
-  if (!v) { er.textContent = "Enter the crew code."; er.hidden = false; return; }
+  if (!v) { er.textContent = "Enter your code."; er.hidden = false; return; }
   if (!API || API.startsWith("PASTE")) { er.textContent = "This app isn't connected to the records sheet yet. The office needs to finish setup (config.js)."; er.hidden = false; return; }
   if (!navigator.onLine) { er.textContent = "You need signal the first time you sign in."; er.hidden = false; return; }
   const btn = $("#code-btn"); btn.disabled = true; btn.textContent = "Checking…";
@@ -127,10 +139,10 @@ $("#code-btn").addEventListener("click", async () => {
     code = v;
     const r = await apiGet("config");
     if (!r.ok) { code = ""; er.textContent = "That code isn't right. Check with the office."; er.hidden = false; return; }
-    ls.set("aol-code", v);
+    ls.set("aol-code", v); setRole(r.role); $("#code-in").value = "";
     cfg = { pilots: r.pilots || [], aircraft: r.aircraft || [], species: (r.species && r.species.length) ? r.species : DEFAULT_CFG.species };
     ls.set("aol-cfg", cfg);
-    er.hidden = true; go(0); show("log");
+    er.hidden = true; if ($("#done").hidden) go(step); show(role === "admin" ? "records" : "log");
   } catch (e) { code = ""; er.textContent = "Couldn't reach the records sheet. Try again in a moment."; er.hidden = false; }
   finally { btn.disabled = false; btn.textContent = "Continue"; }
 });
@@ -327,6 +339,7 @@ async function submit() {
     $("#err-3").textContent = "This phone couldn't save the flight. Free up some storage, then tap Submit again.";
     $("#err-3").hidden = false; btn.disabled = false; btn.textContent = NEXT_LABEL[3]; return;
   }
+  addMine(flight);
   if (flight.area) { const a = ls.get("aol-areas", []); if (!a.includes(flight.area)) { a.push(flight.area); ls.set("aol-areas", a); } }
   photos.forEach(p => URL.revokeObjectURL(p.url)); photos = []; kv.del("draft-photos").catch(() => {});
   const keep = { pilot: form.pilot, aircraft: form.aircraft, hstart: form.hend };
@@ -355,14 +368,14 @@ function flush() {
       try {
         const ph = await Promise.all((it.photos || []).map(async b => ({ mime: b.type || "image/jpeg", data: await toB64(b) })));
         const r = await apiPost({ action: "submit", code, flight: it.flight, photos: ph });
-        if (r.ok) { await queue.del(it.clientId); sent.push(it.clientId); }
+        if (r.ok) { await queue.del(it.clientId); sent.push(it.clientId); markSent(it.clientId); }
         else if (r.error === "bad_code") { signOut("The crew code changed. Enter the new one; your saved flights will send after."); break; }
         else if (r.error === "invalid") { it.problem = r.message; await queue.put(it); toast("A saved flight was rejected: " + r.message); }
       } catch (e) { break; } // no signal or the sheet is unreachable: try again later
     }
     return sent;
   })();
-  return flushing.finally(async () => { flushing = null; await refreshPending(); if (records) loadRecords(true); });
+  return flushing.finally(async () => { flushing = null; await refreshPending(); if (role === "admin" && records) loadRecords(true); if (!$("#view-mine").hidden) renderMine(); });
 }
 window.addEventListener("online", () => { chip(); flush(); loadConfig(); });
 window.addEventListener("offline", chip);
@@ -370,13 +383,35 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) flus
 setInterval(() => { if (pendingCount) flush(); }, 60000);
 $("#sync").addEventListener("click", () => { if (pendingCount) { toast("Trying to send…"); flush(); } else chip(); });
 
+/* ---------------- my flights (this phone only) ---------------- */
+function addMine(f) {
+  const list = ls.get("aol-mine", []);
+  list.unshift({ id: f.clientId, date: f.date, pilot: f.pilot, aircraft: f.aircraft, type: f.type, area: f.area || "", purpose: f.purpose || "",
+    hours: f.hours, total: f.type === "predator" ? f.harvestTotal : f.type === "survey" ? f.deerTotal : null, sent: false });
+  ls.set("aol-mine", list.slice(0, 100));
+}
+function markSent(id) { const list = ls.get("aol-mine", []); const m = list.find(x => x.id === id); if (m) { m.sent = true; ls.set("aol-mine", list); } }
+async function renderMine() {
+  let waiting = new Set();
+  try { waiting = new Set((await queue.all()).map(q => q.clientId)); } catch (e) {}
+  const list = ls.get("aol-mine", []);
+  $("#mine-list").innerHTML = list.length ? list.map(m => {
+    const [cls, lab] = TYPE_TAG[m.type] || TYPE_TAG.other;
+    const isWait = waiting.has(m.id) || !m.sent;
+    const sub = m.type === "predator" ? `${m.total || 0} taken` : m.type === "survey" ? `${m.total || 0} deer` : esc(m.purpose);
+    return `<div class="flight"><div style="padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center"><span class="tag ${cls}">${lab}</span><span class="meta"><b>${esc(m.date)} · ${esc(String(m.aircraft).split(" ")[0])} · ${(+m.hours || 0).toFixed(1)} h</b><small>${esc(m.area)}${m.area ? " · " : ""}${sub}</small></span><span class="tag ${isWait && waiting.has(m.id) ? "wait" : "sent"}">${isWait && waiting.has(m.id) ? "Waiting" : "Sent"}</span></div></div>`;
+  }).join("") : `<div class="empty">No flights from this phone yet. Flights you submit show up here with whether they've reached the office.</div>`;
+}
+
 /* ---------------- records ---------------- */
 async function loadRecords(quiet) {
+  if (role !== "admin") return;
   if (!navigator.onLine || !code || !API || API.startsWith("PASTE")) { renderRecords(); return; }
   try {
     const r = await apiGet("records");
     if (r.ok) { records = { at: Date.now(), flights: r.flights || [] }; ls.set("aol-records", records); renderRecords(); }
-    else if (r.error === "bad_code") signOut("That crew code no longer works.");
+    else if (r.error === "admin_only") setRole("crew");
+    else if (r.error === "bad_code") signOut("That code no longer works.");
   } catch (e) { if (!quiet) toast("Couldn't reach the records sheet."); renderRecords(); }
 }
 $("#btn-refresh").addEventListener("click", () => loadRecords());
@@ -434,6 +469,7 @@ function flightCard(f) {
 (async function start() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  setRole(role);
   await loadDraft();
   go(step);
   show(code ? ls.get("aol-tab", "log") : "code");
