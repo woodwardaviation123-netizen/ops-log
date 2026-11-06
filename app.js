@@ -240,26 +240,45 @@ document.addEventListener("click", e => {
 function hoursVal() { const s = parseFloat(form.hstart), e = parseFloat(form.hend); if (isNaN(s) || isNaN(e)) return null; return Math.round((e - s) * 10) / 10; }
 function renderHours() { const h = hoursVal(); $("#hours").textContent = h == null ? "—" : h.toFixed(1); }
 function renderShots() { $("#shots").innerHTML = photos.map((p, i) => `<div class="shot"><img src="${p.url}" alt="Log photo ${i + 1}"><button type="button" data-rmp="${i}" aria-label="Remove photo ${i + 1}">×</button></div>`).join(""); }
-$("#f-photo").addEventListener("change", async e => {
+let photoBusy = false;
+async function addPhotos(e) {
   const files = [...e.target.files]; e.target.value = "";
+  if (!files.length) return;
+  photoBusy = true; $("#photo-busy").hidden = false; $("#btn-next").disabled = true;
   for (const f of files) {
-    try { const blob = await compress(f); photos.push({ blob, url: URL.createObjectURL(blob) }); }
-    catch (err) { toast("That photo couldn't be read. Try again."); }
+    try { const blob = await compress(f); photos.push({ blob, url: URL.createObjectURL(blob) }); renderShots(); }
+    catch (err) { toast("That photo couldn't be read. Try again, or use Choose from photos."); }
   }
-  renderShots(); saveDraftPhotos(); $("#err-2").hidden = true;
-});
-function compress(file) {
-  return new Promise((res, rej) => {
-    const img = new Image(), u = URL.createObjectURL(file);
-    img.onload = () => {
-      const max = 1800, sc = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
-      c.toBlob(b => (b ? res(b) : rej()), "image/jpeg", 0.8);
-    };
-    img.onerror = () => { URL.revokeObjectURL(u); rej(); };
-    img.src = u;
-  });
+  photoBusy = false; $("#photo-busy").hidden = true; $("#btn-next").disabled = false;
+  renderShots(); saveDraftPhotos(); if (photos.length) $("#err-2").hidden = true;
+}
+$("#f-photo").addEventListener("change", addPhotos);
+$("#f-photo-lib").addEventListener("change", addPhotos);
+
+// Shrinks the photo to about 1800 px on the long side. Uses createImageBitmap where the
+// phone supports it (lighter on memory), and falls back to a plain image decode.
+const MAX_SIDE = 1800;
+async function compress(file) {
+  let src, w, h, cleanup = () => {};
+  try {
+    src = await createImageBitmap(file);
+    w = src.width; h = src.height; cleanup = () => src.close && src.close();
+  } catch (e) {
+    src = await new Promise((res, rej) => {
+      const img = new Image(), u = URL.createObjectURL(file);
+      img.onload = () => { URL.revokeObjectURL(u); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(u); rej(new Error("decode")); };
+      img.src = u;
+    });
+    w = src.naturalWidth; h = src.naturalHeight;
+  }
+  const sc = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const c = document.createElement("canvas"); c.width = Math.round(w * sc); c.height = Math.round(h * sc);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height); cleanup();
+  const blob = await new Promise(res => c.toBlob(res, "image/jpeg", 0.8));
+  c.width = c.height = 0; // free the canvas memory right away (matters on iPhone)
+  if (!blob) throw new Error("encode");
+  return blob;
 }
 
 /* ---------------- validation & steps ---------------- */
@@ -304,7 +323,7 @@ function go(s) {
   saveDraft(); window.scrollTo({ top: 0 });
 }
 $("#btn-back").addEventListener("click", () => go(Math.max(0, step - 1)));
-$("#btn-next").addEventListener("click", () => { if (step < 3) { if (validate(step)) go(step + 1); } else submit(); });
+$("#btn-next").addEventListener("click", () => { if (photoBusy) return; if (step < 3) { if (validate(step)) go(step + 1); } else submit(); });
 
 function renderReview() {
   const h = hoursVal();
